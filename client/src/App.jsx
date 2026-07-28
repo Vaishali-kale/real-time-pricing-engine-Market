@@ -179,7 +179,9 @@ function App() {
 
     setStatus("Connecting");
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(
+  "wss://real-time-pricing-engine-market.onrender.com/ws"
+);
 
     wsRef.current = ws;
 

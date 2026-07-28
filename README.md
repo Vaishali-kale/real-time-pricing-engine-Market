@@ -1,4 +1,4 @@
-Real-Time Pricing Engine – Market Data Dashboard
+Real-Time Pricing Engine – Market Data Dashboard  https://real-time-pricing-engine-frontend.onrender.com/
 
 A full-stack real-time market pricing application built with React.js, Node.js, Express.js, WebSocket, and Redis.
 
@@ -169,7 +169,7 @@ Clone the repository:
 
 git clone https://github.com/Vaishali-kale/real-time-pricing-engine-Market.git
 
-Go into the project:
+Go into the project:https://real-time-pricing-engine-frontend.onrender.com/
 
 cd real-time-pricing-engine-Market
 Backend
@@ -264,3 +264,4 @@ More financial instruments
 Vaishali Kale
 
 GitHub: Vaishali-kale GitHub: https://github.com/Vaishali-kale/real-time-pricing-engine-Market.git
+Deploye: https://real-time-pricing-engine-frontend.onrender.com/

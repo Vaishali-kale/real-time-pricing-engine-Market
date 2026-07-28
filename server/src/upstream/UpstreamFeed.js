@@ -19,11 +19,14 @@ export class UpstreamFeed {
     this.closed = false;
 
     this.latestTimestamp = new Map();
+
+    // Prevent reconnect after authentication/session error
+    this.sessionError = false;
   }
 
   start() {
     this.closed = false;
-
+    this.sessionError = false;
     this.connect();
   }
 
@@ -36,13 +39,11 @@ export class UpstreamFeed {
   }
 
   connect() {
-    if (this.closed) {
+    if (this.closed || this.sessionError) {
       return;
     }
 
-    console.log(
-      "Connecting to upstream..."
-    );
+    console.log("Connecting to upstream...");
 
     this.ws = new WebSocket(
       config.upstreamUrl
@@ -52,8 +53,6 @@ export class UpstreamFeed {
       console.log(
         "Upstream WebSocket connected"
       );
-
-      this.retry = 0;
 
       this.authenticate();
     });
@@ -76,11 +75,23 @@ export class UpstreamFeed {
         "Upstream connection closed"
       );
 
-      this.reconnect();
+      if (
+        !this.closed &&
+        !this.sessionError
+      ) {
+        this.reconnect();
+      }
     });
   }
 
   authenticate() {
+    if (
+      !this.ws ||
+      this.ws.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+
     const message = {
       action: "auth",
       api_key: config.apiKey,
@@ -97,6 +108,13 @@ export class UpstreamFeed {
   }
 
   subscribe() {
+    if (
+      !this.ws ||
+      this.ws.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+
     const message = {
       action: "subscribeMarketPrice",
       symbols: SYMBOLS
@@ -134,7 +152,60 @@ export class UpstreamFeed {
       )
     );
 
-    // Authentication success
+    // =====================================
+    // 1. ACTIVE SESSION ERROR
+    // =====================================
+
+    if (
+      message?.event === "error" &&
+      message?.message ===
+        "already have an active session"
+    ) {
+      console.error(
+        "LiveFXHub already has an active session."
+      );
+
+      this.sessionError = true;
+
+      this.onStatus?.({
+        connected: false,
+        message:
+          "Upstream already has an active session"
+      });
+
+      if (this.ws) {
+        this.ws.close();
+      }
+
+      return;
+    }
+
+    // =====================================
+    // 2. GENERAL UPSTREAM ERROR
+    // =====================================
+
+    if (
+      message?.event === "error"
+    ) {
+      console.error(
+        "Upstream error:",
+        message
+      );
+
+      this.onStatus?.({
+        connected: false,
+        message:
+          message?.message ||
+          "Upstream error"
+      });
+
+      return;
+    }
+
+    // =====================================
+    // 3. AUTHENTICATION SUCCESS
+    // =====================================
+
     const authSuccess =
       message?.success === true ||
       message?.authenticated === true ||
@@ -146,6 +217,8 @@ export class UpstreamFeed {
         "Authentication successful"
       );
 
+      this.retry = 0;
+
       this.subscribe();
 
       this.onStatus?.({
@@ -156,7 +229,10 @@ export class UpstreamFeed {
       return;
     }
 
-    // Authentication error
+    // =====================================
+    // 4. OTHER ERROR RESPONSES
+    // =====================================
+
     if (
       message?.success === false ||
       message?.error
@@ -176,20 +252,30 @@ export class UpstreamFeed {
       return;
     }
 
-    // Extract data
+    // =====================================
+    // 5. EXTRACT MARKET DATA
+    // =====================================
+
     let data = [];
 
     if (Array.isArray(message)) {
       data = message;
+
     } else if (
       Array.isArray(message?.data)
     ) {
       data = message.data;
+
     } else if (message?.data) {
       data = [message.data];
+
     } else {
       data = [message];
     }
+
+    // =====================================
+    // 6. PROCESS TICKS
+    // =====================================
 
     for (const item of data) {
       const tick =
@@ -244,7 +330,14 @@ export class UpstreamFeed {
   }
 
   reconnect() {
-    if (this.closed) {
+    if (
+      this.closed ||
+      this.sessionError
+    ) {
+      console.log(
+        "Reconnect stopped."
+      );
+
       return;
     }
 

@@ -1,76 +1,196 @@
-import {
-  useEffect,
-  useRef,
-  useState
-} from "react";
-
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 
+const WS_URL =
+  "wss://real-time-pricing-engine-market.onrender.com/ws";
+
 const ALL_SYMBOLS = [
- "AUDUSD",	"AUDCAD",	"AUDCHF",	"AUDJPY",	"AUDNZD",
-"AUDSGD",	"CADCHF",	"CADJPY",	"CHFJPY",	"CHFSGD",
-"EURAUD",	"EURCAD",	"EURCHF",	"EURGBP",	"EURJPY",
-"EURNZD",	"EURUSD",	"GBPAUD",	"GBPCAD",	"GBPCHF",
-"GBPJPY",	"GBPNZD",	"GBPUSD",	"NZDCAD",	"NZDCHF",
-"NZDJPY",	"NZDUSD",	"USDCAD",	"USDCHF",	"USDCNH",
-"USDJPY",	"USDMXN",	"USDNOK",	"USDPLN",	"USDSEK",
-"USDSGD",	"USDTRY",	"USDZAR",	"EURTRY",	"GBPTRY",
-"NOKJPY",	"SEKJPY",	"SGDJPY",	"ZARJPY",	"XAUUSD",
-"XAGUSD",	"BTCUSD",	"ETHUSD",	"BNBUSD",	"SOLUSD",
-"XRPUSD",	"ADAUSD",	"DOGUSD",	"DOTUSD",	"LTCUSD",
-"BCHUSD",	"XLMUSD",	"TRXUSD",	"UNIUSD",	"FILUSD",
-"AVXUSD"
+  "AUDUSD", "AUDCAD", "AUDCHF", "AUDJPY", "AUDNZD", "AUDSGD",
+  "CADCHF", "CADJPY", "CHFJPY", "CHFSGD",
+  "EURAUD", "EURCAD", "EURCHF", "EURGBP", "EURJPY", "EURNZD", "EURUSD",
+  "GBPAUD", "GBPCAD", "GBPCHF", "GBPJPY", "GBPNZD", "GBPUSD",
+  "NZDCAD", "NZDCHF", "NZDJPY", "NZDUSD",
+  "USDCAD", "USDCHF", "USDCNH", "USDJPY", "USDMXN",
+  "USDNOK", "USDPLN", "USDSEK", "USDSGD", "USDTRY", "USDZAR",
+  "EURTRY", "GBPTRY", "NOKJPY", "SEKJPY", "SGDJPY", "ZARJPY",
+  "XAUUSD", "XAGUSD",
+  "BTCUSD", "ETHUSD", "BNBUSD", "SOLUSD", "XRPUSD",
+  "ADAUSD", "DOGUSD", "DOTUSD", "LTCUSD", "BCHUSD",
+  "XLMUSD", "TRXUSD", "UNIUSD", "FILUSD", "AVXUSD"
+];
+
+const DEFAULT_SYMBOLS = [
+  "EURUSD",
+  "GBPUSD",
+  "USDJPY",
+  "XAUUSD",
+  "BTCUSD"
 ];
 
 function App() {
+  const wsRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const reconnectAttemptRef = useRef(0);
+  const manuallyClosedRef = useRef(false);
 
-  const wsRef =
-    useRef(null);
+  const [status, setStatus] = useState("Connecting");
+  const [prices, setPrices] = useState({});
+  const [selectedSymbols, setSelectedSymbols] =
+    useState(DEFAULT_SYMBOLS);
 
-  const [
-    status,
-    setStatus
-  ] = useState("Connecting");
+  const sendSubscription = useCallback(
+    (ws, symbols) => {
+      if (
+        !ws ||
+        ws.readyState !== WebSocket.OPEN
+      ) {
+        return;
+      }
 
-  const [
-    prices,
-    setPrices
-  ] = useState({});
+      const message = {
+        action: "subscribe",
+        symbols
+      };
 
-  const [
-    selectedSymbols,
-    setSelectedSymbols
-  ] = useState([
-    "EURUSD",
-    "GBPUSD",
-    "USDJPY",
-    "XAUUSD",
-    "BTCUSD"
-  ]);
+      console.log(
+        "Subscription sent:",
+        symbols
+      );
 
+      ws.send(JSON.stringify(message));
+    },
+    []
+  );
 
-  // =========================
-  // CONNECT
-  // =========================
+  const handleMessage = useCallback(
+    (message) => {
+      console.log(
+        "Backend message:",
+        message
+      );
 
-  useEffect(() => {
+      // Backend connection
+      if (message.type === "connected") {
+        console.log(
+          "Backend:",
+          message.message
+        );
+        return;
+      }
 
-    const ws = new WebSocket(
-  "wss://real-time-pricing-engine-market.onrender.com/ws"
-);
+      // Subscription confirmation
+      if (message.type === "subscribed") {
+        console.log(
+          "Subscribed:",
+          message.symbols
+        );
+        return;
+      }
+
+      // Upstream status
+      if (message.type === "upstreamStatus") {
+        console.log(
+          "UPSTREAM STATUS:",
+          message.data
+        );
+
+        if (
+          message.data?.connected === true
+        ) {
+          setStatus("Live");
+        }
+
+        return;
+      }
+
+      // Initial prices
+      if (message.type === "snapshot") {
+        console.log(
+          "SNAPSHOT:",
+          message.data
+        );
+
+        setPrices((previous) => ({
+          ...previous,
+          ...message.data
+        }));
+
+        return;
+      }
+
+      // Live price
+      if (message.type === "tick") {
+        console.log(
+          "LIVE PRICE FROM BACKEND:",
+          message.data
+        );
+
+        const symbol =
+          message.data?.s;
+
+        if (!symbol) {
+          return;
+        }
+
+        setPrices((previous) => ({
+          ...previous,
+          [symbol]: {
+            ...previous[symbol],
+            ...message.data
+          }
+        }));
+
+        return;
+      }
+
+      // Error
+      if (message.type === "error") {
+        console.error(
+          "Backend error:",
+          message.message
+        );
+      }
+    },
+    []
+  );
+
+  const connectWebSocket = useCallback(() => {
+    if (manuallyClosedRef.current) {
+      return;
+    }
+
+    // Prevent duplicate connections
+    if (
+      wsRef.current &&
+      (
+        wsRef.current.readyState ===
+          WebSocket.OPEN ||
+        wsRef.current.readyState ===
+          WebSocket.CONNECTING
+      )
+    ) {
+      return;
+    }
+
+    console.log(
+      "Connecting:",
+      WS_URL
+    );
+
+    setStatus("Connecting");
+
+    const ws = new WebSocket(WS_URL);
 
     wsRef.current = ws;
 
-
     ws.onopen = () => {
-
       console.log(
-        "Connected to Node WebSocket"
+        "WebSocket connected"
       );
 
-      setStatus(
-        "Connected"
-      );
+      reconnectAttemptRef.current = 0;
+
+      setStatus("Connected");
 
       sendSubscription(
         ws,
@@ -78,275 +198,178 @@ function App() {
       );
     };
 
-
-    ws.onmessage = (
-      event
-    ) => {
-
-      console.log(
-        "Received:",
-        event.data
-      );
-
+    ws.onmessage = (event) => {
       try {
-
         const message =
-          JSON.parse(
-            event.data
-          );
+          JSON.parse(event.data);
 
-        handleMessage(
-          message
-        );
-
+        handleMessage(message);
       } catch (error) {
-
         console.error(
           "Invalid WebSocket message:",
-          error
+          event.data
         );
       }
     };
 
-
-    ws.onerror = (
-      error
-    ) => {
-
+    ws.onerror = (error) => {
       console.error(
-        "WebSocket Error:",
+        "WebSocket error:",
         error
       );
 
-      setStatus(
-        "Error"
-      );
+      setStatus("Error");
     };
 
-
     ws.onclose = () => {
-
       console.log(
         "WebSocket disconnected"
       );
 
-      setStatus(
-        "Disconnected"
-      );
-    };
+      wsRef.current = null;
 
+      if (
+        manuallyClosedRef.current
+      ) {
+        return;
+      }
+
+      setStatus("Reconnecting");
+
+      const attempt =
+        reconnectAttemptRef.current;
+
+      const delay = Math.min(
+        30000,
+        1000 *
+          Math.pow(2, attempt)
+      );
+
+      reconnectAttemptRef.current =
+        attempt + 1;
+
+      console.log(
+        `Trying WebSocket reconnect in ${delay}ms`
+      );
+
+      clearTimeout(
+        reconnectTimerRef.current
+      );
+
+      reconnectTimerRef.current =
+        setTimeout(() => {
+          connectWebSocket();
+        }, delay);
+    };
+  }, [
+    handleMessage,
+    selectedSymbols,
+    sendSubscription
+  ]);
+
+  // Initial connection
+  useEffect(() => {
+    manuallyClosedRef.current = false;
+
+    connectWebSocket();
 
     return () => {
+      manuallyClosedRef.current = true;
 
-      ws.close();
+      clearTimeout(
+        reconnectTimerRef.current
+      );
 
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
+  }, [connectWebSocket]);
 
-  }, []);
-
-
-  // =========================
-  // SEND SUBSCRIPTION
-  // =========================
-
-  function sendSubscription(
-    ws,
-    symbols
-  ) {
+  // Update subscription
+  useEffect(() => {
+    const ws = wsRef.current;
 
     if (
       ws &&
-      ws.readyState ===
-        WebSocket.OPEN
+      ws.readyState === WebSocket.OPEN
     ) {
-
-      ws.send(
-        JSON.stringify({
-          action:
-            "subscribe",
-          symbols
-        })
-      );
-
-      console.log(
-        "Subscribed:",
-        symbols
-      );
-    }
-  }
-
-
-  // =========================
-  // HANDLE MESSAGE
-  // =========================
-
-  function handleMessage(
-    message
-  ) {
-
-    if (
-      message.type ===
-      "connected"
-    ) {
-
-      console.log(
-        "Backend:",
-        message.message
-      );
-
-      return;
-    }
-
-
-    if (
-      message.type ===
-      "subscribed"
-    ) {
-
-      console.log(
-        "Subscribed symbols:",
-        message.symbols
-      );
-
-      return;
-    }
-
-
-    if (
-      message.type ===
-      "upstreamStatus"
-    ) {
-
-      console.log(
-        "Upstream:",
-        message.data
-      );
-
-      return;
-    }
-
-
-    if (
-      message.type ===
-      "snapshot"
-    ) {
-
-      setPrices(
-        (previous) => ({
-          ...previous,
-          ...message.data
-        })
-      );
-
-      return;
-    }
-
-
-    if (
-      message.type ===
-      "tick"
-    ) {
-
-      const symbol =
-        message.data.s;
-
-      setPrices(
-        (previous) => ({
-          ...previous,
-
-          [symbol]: {
-            ...previous[
-              symbol
-            ],
-            ...message.data
-          }
-        })
-      );
-
-      return;
-    }
-
-
-    if (
-      message.type ===
-      "error"
-    ) {
-
-      console.error(
-        "Backend error:",
-        message.message
-      );
-    }
-  }
-
-
-  // =========================
-  // SYMBOL TOGGLE
-  // =========================
-
-  function toggleSymbol(
-    symbol
-  ) {
-
-    setSelectedSymbols(
-      (previous) => {
-
-        if (
-          previous.includes(
-            symbol
-          )
-        ) {
-
-          return previous.filter(
-            (item) =>
-              item !== symbol
-          );
-        }
-
-        return [
-          ...previous,
-          symbol
-        ];
-      }
-    );
-  }
-
-
-  // =========================
-  // UPDATE SUBSCRIPTION
-  // =========================
-
-  useEffect(() => {
-
-    if (
-      wsRef.current &&
-      wsRef.current.readyState ===
-        WebSocket.OPEN
-    ) {
-
       sendSubscription(
-        wsRef.current,
+        ws,
         selectedSymbols
       );
     }
-
   }, [
-    selectedSymbols
+    selectedSymbols,
+    sendSubscription
   ]);
 
+  function toggleSymbol(symbol) {
+    setSelectedSymbols((previous) => {
+      if (previous.includes(symbol)) {
+        return previous.filter(
+          (item) => item !== symbol
+        );
+      }
 
-  // =========================
-  // UI
-  // =========================
+      return [
+        ...previous,
+        symbol
+      ];
+    });
+  }
+
+  function formatPrice(value) {
+    if (
+      value === null ||
+      value === undefined ||
+      !Number.isFinite(Number(value))
+    ) {
+      return "Waiting...";
+    }
+
+    return Number(value).toFixed(5);
+  }
+
+  function formatChange(value) {
+    if (
+      value === null ||
+      value === undefined ||
+      !Number.isFinite(Number(value))
+    ) {
+      return "Waiting...";
+    }
+
+    const number = Number(value);
+
+    return `${number > 0 ? "+" : ""}${number.toFixed(4)}%`;
+  }
+
+  function formatTime(timestamp) {
+    if (!timestamp) {
+      return "Waiting...";
+    }
+
+    const date = new Date(
+      Number(timestamp)
+    );
+
+    if (
+      Number.isNaN(date.getTime())
+    ) {
+      return "Waiting...";
+    }
+
+    return date.toLocaleTimeString();
+  }
 
   return (
-
     <div className="app">
 
       <div className="header">
 
         <div>
-
           <h1>
             Real-Time Pricing Engine
           </h1>
@@ -354,18 +377,21 @@ function App() {
           <p>
             Live Market Price Dashboard
           </p>
-
         </div>
 
-
-        <div className="status">
-
+        <div
+          className={`status ${
+            status === "Live"
+              ? "live"
+              : ""
+          }`}
+        >
           ● {status}
-
         </div>
 
       </div>
 
+      {/* SYMBOLS */}
 
       <div className="card">
 
@@ -373,12 +399,10 @@ function App() {
           Select Symbols
         </h2>
 
-
         <div className="symbols">
 
           {ALL_SYMBOLS.map(
             (symbol) => (
-
               <button
                 key={symbol}
                 className={
@@ -389,14 +413,11 @@ function App() {
                     : "symbol"
                 }
                 onClick={() =>
-                  toggleSymbol(
-                    symbol
-                  )
+                  toggleSymbol(symbol)
                 }
               >
                 {symbol}
               </button>
-
             )
           )}
 
@@ -404,6 +425,7 @@ function App() {
 
       </div>
 
+      {/* MARKET DATA */}
 
       <div className="card">
 
@@ -411,47 +433,21 @@ function App() {
           Market Data
         </h2>
 
-
         <div className="table-container">
 
           <table>
 
             <thead>
-
               <tr>
-
-                <th>
-                  Symbol
-                </th>
-
-                <th>
-                  Buy
-                </th>
-
-                <th>
-                  Sell
-                </th>
-
-                <th>
-                  24h High
-                </th>
-
-                <th>
-                  24h Low
-                </th>
-
-                <th>
-                  24h Change
-                </th>
-
-                <th>
-                  Time
-                </th>
-
+                <th>Symbol</th>
+                <th>Buy</th>
+                <th>Sell</th>
+                <th>24h High</th>
+                <th>24h Low</th>
+                <th>24h Change</th>
+                <th>Time</th>
               </tr>
-
             </thead>
-
 
             <tbody>
 
@@ -459,16 +455,15 @@ function App() {
                 (symbol) => {
 
                   const price =
-                    prices[
-                      symbol
-                    ];
+                    prices[symbol];
 
+                  const change =
+                    Number(
+                      price?.c
+                    );
 
                   return (
-
-                    <tr
-                      key={symbol}
-                    >
+                    <tr key={symbol}>
 
                       <td>
                         <strong>
@@ -476,63 +471,52 @@ function App() {
                         </strong>
                       </td>
 
-
-                      <td>
-                        {price?.b ??
-                          "-"}
+                      <td className="buy">
+                        {formatPrice(
+                          price?.b
+                        )}
                       </td>
 
-
-                      <td>
-                        {price?.a ??
-                          "-"}
+                      <td className="sell">
+                        {formatPrice(
+                          price?.a
+                        )}
                       </td>
 
-
                       <td>
-                        {price?.h ??
-                          "-"}
+                        {formatPrice(
+                          price?.h
+                        )}
                       </td>
 
-
                       <td>
-                        {price?.l ??
-                          "-"}
+                        {formatPrice(
+                          price?.l
+                        )}
                       </td>
-
 
                       <td
                         className={
-                          price?.c > 0
+                          change > 0
                             ? "positive"
-                            : price?.c < 0
+                            : change < 0
                             ? "negative"
                             : ""
                         }
                       >
-
-                        {price?.c !==
-                        undefined
-                          ? `${price.c}%`
-                          : "-"}
-
+                        {formatChange(
+                          price?.c
+                        )}
                       </td>
 
-
                       <td>
-
-                        {price?.t
-                          ? new Date(
-                              price.t
-                            ).toLocaleTimeString()
-                          : "-"}
-
+                        {formatTime(
+                          price?.t
+                        )}
                       </td>
 
                     </tr>
-
                   );
-
                 }
               )}
 
